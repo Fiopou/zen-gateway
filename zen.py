@@ -24,9 +24,12 @@ UA = "opencode/1.18.16"
 
 DEFAULT_MODELS = [
     "deepseek-v4-flash-free",
-    "nemotron-3-ultra-free",
-    "laguna-s-2.1-free",
+    "hy3-free",
     "big-pickle",
+    "nemotron-3-ultra-free",
+    "nemotron-3.5-lightning-free",
+    "laguna-s-2.1-free",
+    "mimo-v2.5-free",
 ]
 
 
@@ -41,10 +44,17 @@ def proxy_for():
     return random.choice(proxies)
 
 
+def _auth_header():
+    """ZEN_API_KEY - реальный ключ console.opencode.ai: открывает платные модели.
+    Без ключа - анонимный доступ ("public") к free-моделям."""
+    key = os.environ.get("ZEN_API_KEY", "").strip()
+    return f"Bearer {key}" if key else "Bearer public"
+
+
 def _request(url, payload, stream=False, proxy=None, headers_extra=None):
     data = json.dumps(payload).encode("utf-8")
     headers = {
-        "Authorization": "Bearer public",
+        "Authorization": _auth_header(),
         "Content-Type": "application/json",
         "x-opencode-session": payload.get("_session", "zenpy-" + str(os.getpid())),
         "x-opencode-client": "zen.py/1.0",
@@ -318,7 +328,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
                         "choices": chunk.get("choices", []),
                     }
                     self.wfile.write(f"data: {json.dumps(out)}\n\n".encode("utf-8"))
+                    self.wfile.flush()
                 self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
             else:
                 resp = chat(model, messages, stream=False, session=session)
                 self._reply(200, resp)
