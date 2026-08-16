@@ -265,6 +265,18 @@ def _report_rate(e):
 class GatewayHandler(BaseHTTPRequestHandler):
     server_version = "ZenGateway/1.0"
     max_context = int(os.environ.get("ZEN_MAX_CONTEXT", "150000"))
+    session_id = "gw-" + os.urandom(6).hex()
+
+    def _cors_headers(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key")
+        self.send_header("Access-Control-Max-Age", "86400")
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self._cors_headers()
+        self.end_headers()
 
     def _auth(self):
         token = os.environ.get("ZEN_TOKEN", "")
@@ -278,6 +290,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def _reply(self, code, obj):
         data = json.dumps(obj).encode("utf-8")
         self.send_response(code)
+        self._cors_headers()
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -286,10 +299,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._auth():
             return
-        if self.path.rstrip("/").endswith("/models"):
+        path = self.path.split("?")[0].rstrip("/")
+        if path.endswith("/models"):
             self._reply(200, {"object": "list", "data": [{"id": m, "object": "model", "owned_by": "zen"} for m in list_models()]})
         else:
-            self._reply(404, {"error": {"message": "not found", "type": "invalid_request_error", "code": 404}})
+            self._reply(404, {"error": {"message": f"not found: {self.path}", "type": "invalid_request_error", "code": 404}})
 
     def do_POST(self):
         if not self._auth():
@@ -300,19 +314,21 @@ class GatewayHandler(BaseHTTPRequestHandler):
         except Exception:
             self._reply(400, {"error": {"message": "invalid json", "type": "invalid_request_error", "code": 400}})
             return
-        if not self.path.rstrip("/").endswith("/chat/completions"):
-            self._reply(404, {"error": {"message": "not found", "type": "invalid_request_error", "code": 404}})
+        path = self.path.split("?")[0].rstrip("/")
+        if "chat/completions" not in path and path not in ("", "/v1", "/v1beta"):
+            self._reply(404, {"error": {"message": f"not found: {self.path}", "type": "invalid_request_error", "code": 404}})
             return
         model = body.get("model") or DEFAULT_MODELS[0]
         messages = body.get("messages") or []
         stream = bool(body.get("stream", False))
-        session = body.get("_session") or f"gw-{random.randint(100000, 999999)}"
+        session = body.get("_session") or GatewayHandler.session_id
         limit = self.max_context
         if limit and estimate_tokens(messages) > limit:
             messages = compact_if_needed(messages, limit)
         try:
             if stream:
                 self.send_response(200)
+                self._cors_headers()
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-cache")
                 self.end_headers()
