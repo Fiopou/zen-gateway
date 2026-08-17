@@ -89,7 +89,7 @@ class ZenError(Exception):
         return self.code in (429, 529) or "rate limit" in self.body.lower() or "RateLimit" in self.body
 
 
-def chat(model, messages, stream=False, session=None):
+def chat(model, messages, stream=False, session=None, max_tokens=None):
     """Одиночный вызов. Возвращает dict ответа (не-стрим) или итератор чанков."""
     payload = {
         "model": model,
@@ -97,6 +97,8 @@ def chat(model, messages, stream=False, session=None):
         "stream": stream,
         "_session": session or ("zenpy-" + str(random.randint(100000, 999999))),
     }
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
     resp = _request(CHAT_URL, payload, stream=stream)
     if not stream:
         return json.loads(resp.read().decode("utf-8"))
@@ -362,7 +364,30 @@ def run_gateway(args):
     httpd = ThreadingHTTPServer(("0.0.0.0", port), GatewayHandler)
     print(f"zen gateway on 0.0.0.0:{port}  (POST /v1/chat/completions, GET /v1/models)")
     print(f"auth: {'ZEN_TOKEN required' if os.environ.get('ZEN_TOKEN') else 'open'}")
+    if os.environ.get("ZEN_PROBE", "1") != "0":
+        _probe_provider(GatewayHandler.session_id)
     httpd.serve_forever()
+
+
+def _probe_provider(session):
+    """Пробный запрос при старте: показывает, какой бэкенд выпал в рулетке."""
+    model = os.environ.get("ZEN_PROBE_MODEL", DEFAULT_MODELS[0])
+    prompt = "Who are you? Exact model and company. Max 15 words."
+    try:
+        resp = chat(model, [{"role": "user", "content": prompt}], stream=False, session=session, max_tokens=80)
+        who = (resp.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+        if not who.strip():
+            resp = chat(model, [{"role": "user", "content": prompt}], stream=False, session=session, max_tokens=400)
+            who = (resp.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+        who = who.strip() or "(пустой ответ)"
+        print(f"[probe] модель '{model}' -> бэкенд: {who[:110]}")
+    except ZenError as e:
+        hint = ""
+        if e.is_rate_limited():
+            hint = " (дневной IP-лимит: смени сеть/VPN)"
+        print(f"[probe] модель '{model}' -> ОШИБКА {e.code}{hint}: {e.body[:100]}")
+    except Exception as e:
+        print(f"[probe] ошибка: {e}")
 
 
 def main():
